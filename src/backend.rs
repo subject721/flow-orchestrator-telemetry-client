@@ -10,7 +10,7 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use zeromq::ZmqError;
 
-pub(crate) struct Backend {
+pub struct Backend {
     rt: tokio::runtime::Runtime,
 
     aggregator: Arc<Mutex<MetricAggregator>>,
@@ -33,10 +33,18 @@ impl Display for Error {
 
 impl std::error::Error for Error {}
 
+
+pub trait MetricAdapter {
+    // Name of the metric that's encapsulated
+    fn get_name(&self) -> &String;
+
+    fn update_current(&mut self, metric : &Metric);
+}
+
 impl Backend {
     pub fn new() -> Backend {
         Backend {
-            rt: Runtime::new().unwrap(),
+            rt: tokio::runtime::Builder::new_multi_thread().enable_io().enable_time().worker_threads(1).build().unwrap()/*Runtime::new().unwrap()*/,
             aggregator: Arc::new(Mutex::new(MetricAggregator::new())),
             task_join_handle: None,
             quit_signal: None,
@@ -106,6 +114,33 @@ impl Backend {
         }
 
         v
+    }
+
+    pub fn get_metric_history(&self, name : &str, history_data : &mut Vec<(f64, f64)>) -> Option<(f64, f64)> {
+        let aggregator_local = self.aggregator.lock().unwrap();
+
+        aggregator_local.get_metric_history(name, history_data)
+    }
+
+    pub fn get_last_timestamp(&self) -> u64 {
+        let aggregator_local = self.aggregator.lock().unwrap();
+
+        aggregator_local.get_last_timestamp()
+    }
+
+    pub fn fetch_updates<T>(&self, mut foreign_it : T)
+    where
+        T: Iterator,
+        T::Item: AsMut<dyn MetricAdapter>
+    {
+        let aggregator_local = self.aggregator.lock().unwrap();
+
+        while let Some(mut element) = foreign_it.next() {
+
+            if let Some(metric) = aggregator_local.get_metric(element.as_mut().get_name()) {
+                element.as_mut().update_current(metric);
+            }
+        }
     }
 
     pub fn disconnect(&mut self) {

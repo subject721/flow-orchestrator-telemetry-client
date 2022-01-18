@@ -1,3 +1,4 @@
+use std::io::Error;
 use crate::common::message::MetricMessage;
 use std::net::IpAddr;
 use tokio::sync::mpsc::error::TrySendError;
@@ -66,29 +67,4 @@ impl Endpoint {
         }
     }
 
-    pub async fn on_msg<T: MessageSink>(&mut self, chan: T) {
-        loop {
-            let msg = self.socket.recv().await;
-
-            if let Ok(msg) = msg {
-                let pub_name: String = String::from_utf8(msg.get(0).unwrap().to_vec()).unwrap();
-
-                if let Some(msg_data) = msg.get(1) {
-                    let rc = chan.try_send(MetricMessage::new(
-                        self.destination.clone(),
-                        pub_name,
-                        msg_data.to_vec(),
-                    ));
-
-                    if rc.is_err() {
-                        println!("Could not queue message to channel: {}", rc.err().unwrap());
-                    }
-                }
-            } else {
-                println!("Aborting message reception");
-
-                return;
-            }
-        }
-    }
 }

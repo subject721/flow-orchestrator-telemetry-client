@@ -1,3 +1,4 @@
+use std::cmp::{max, min};
 use crate::common::metric::{Metric, MetricRawUnit, MetricUnit, MetricValue, OrderOfMagnitude};
 use std::collections::hash_map::Iter;
 use std::collections::{HashMap, VecDeque};
@@ -44,7 +45,7 @@ impl<'a> Iterator for MetricIterator<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         let n = self.internal_it.next();
 
-        if let Some((name, metric_storage)) = n {
+        if let Some((_name_, metric_storage)) = n {
             match metric_storage {
                 MetricStorage::CurrentOnly(current) => Some(current),
                 MetricStorage::History {
@@ -121,9 +122,9 @@ impl MetricAggregator {
         if !self.metrics.contains_key(metric.get_label()) {
             let metric_unit = metric.get_unit();
 
-            let metric_storage = match metric_unit.get_raw_unit() {
-                (MetricRawUnit::Bytes, MetricRawUnit::None)
-                | (MetricRawUnit::Packets, MetricRawUnit::None) => {
+            let metric_storage = match metric_unit.get_raw_unit().0 {
+                MetricRawUnit::Bytes
+                | MetricRawUnit::Packets => {
                     let metric_history =
                         VecDeque::from([(self.last_timestamp, metric.get_value().clone())]);
 
@@ -135,14 +136,16 @@ impl MetricAggregator {
                 _ => MetricStorage::CurrentOnly(metric.clone()),
             };
 
-            self.create_auto_rules(&metric_storage);
+            // XXX: Currently we only support time diff auto rtules anyway so decice based on denominator unit
+            if metric_unit.get_raw_unit().1 == &MetricRawUnit::None {
+                self.create_auto_rules(&metric_storage);
+            }
 
             self.metrics
                 .insert(metric.get_label().to_string(), metric_storage);
         } else {
-            let query_result = self.metrics.get_mut(metric.get_label());
 
-            if let Some(metric_storage) = query_result {
+            if let Some(metric_storage) = self.metrics.get_mut(metric.get_label()) {
                 match metric_storage {
                     MetricStorage::History { current, history } => {
                         *current = metric.clone();
@@ -240,5 +243,63 @@ impl MetricAggregator {
         MetricIterator {
             internal_it: self.metrics.iter(),
         }
+    }
+
+    pub fn get_metric(&self, name: &str) -> Option<&Metric> {
+
+        if let Some(metric_storage) = self.metrics.get(name) {
+            match metric_storage {
+                MetricStorage::History {
+                    current,
+                    history: _,
+                } => {
+                    return Some(current)
+                }
+                MetricStorage::CurrentOnly(current) => {
+                    return Some(current)
+                }
+            }
+        }
+
+        None
+    }
+
+    pub fn get_last_timestamp(&self) -> u64 {
+        self.last_timestamp
+    }
+
+    pub fn get_metric_history(&self, name: &str, data : &mut Vec<(f64, f64)>) -> Option<(f64, f64)> {
+
+        if let Some(metric_storage) = self.metrics.get(name) {
+            match metric_storage {
+                MetricStorage::History {
+                    current: _,
+                    history,
+                } => {
+
+                    data.resize(history.len(), (0.0f64, 0.0f64));
+
+                    let mut max_val = None;
+                    let mut min_val = None;
+
+                    for idx in 0..data.len() {
+                        let current = &history[data.len() - idx - 1];
+
+                        data[idx] = (current.0 as f64 / 1e6f64, f64::from(&current.1));
+
+                        max_val = Some(data[idx].1.max( 0f64));
+
+                        min_val = Some(data[idx].1.min( min_val.unwrap_or(data[idx].1)));
+                    }
+
+                    if max_val.is_some() && min_val.is_some() {
+                        return Some((min_val.unwrap(), max_val.unwrap()))
+                    }
+                }
+                _ => ()
+            }
+        }
+
+        None
     }
 }
