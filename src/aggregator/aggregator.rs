@@ -59,9 +59,9 @@ impl<'a> Iterator for MetricIterator<'a> {
     }
 }
 
-const DEFAULT_MAX_HISTORY: usize = 1024;
+const DEFAULT_MAX_HISTORY: usize = 512;
 
-const DEFAULT_DELTAT: u64 = 1000000;
+const DEFAULT_DELTAT: u64 = 250000;
 
 fn metric_from_time_diff(
     first: &MetricValue,
@@ -124,7 +124,9 @@ impl MetricAggregator {
 
             let metric_storage = match metric_unit.get_raw_unit().0 {
                 MetricRawUnit::Bytes
-                | MetricRawUnit::Packets => {
+                | MetricRawUnit::Bits
+                | MetricRawUnit::Packets
+                | MetricRawUnit::None => {
                     let metric_history =
                         VecDeque::from([(self.last_timestamp, metric.get_value().clone())]);
 
@@ -268,7 +270,7 @@ impl MetricAggregator {
         self.last_timestamp
     }
 
-    pub fn get_metric_history(&self, name: &str, data : &mut Vec<(f64, f64)>) -> Option<(f64, f64)> {
+    pub fn get_metric_history(&self, name: &str, data : &mut Vec<(f64, f64)>, max_len : usize) -> Option<(f64, f64)> {
 
         if let Some(metric_storage) = self.metrics.get(name) {
             match metric_storage {
@@ -277,19 +279,27 @@ impl MetricAggregator {
                     history,
                 } => {
 
-                    data.resize(history.len(), (0.0f64, 0.0f64));
+                    let requested_len = min(max_len, history.len());
+
+                    if data.len() != requested_len {
+                        data.resize(requested_len, (0.0f64, 0.0f64));
+                    }
 
                     let mut max_val = None;
                     let mut min_val = None;
 
-                    for idx in 0..data.len() {
-                        let current = &history[data.len() - idx - 1];
+                    for idx in 0..history.len() {
+                        let current = &history[idx];
 
-                        data[idx] = (current.0 as f64 / 1e6f64, f64::from(&current.1));
+                        let current_metric_val = f64::from(&current.1);
 
-                        max_val = Some(data[idx].1.max( 0f64));
+                        if idx < requested_len {
+                            data[requested_len - idx - 1] = (current.0 as f64 / 1e6f64, current_metric_val);
+                        }
 
-                        min_val = Some(data[idx].1.min( min_val.unwrap_or(data[idx].1)));
+                        max_val = Some(current_metric_val.max( max_val.unwrap_or(0.0f64)));
+
+                        min_val = Some(current_metric_val.min( min_val.unwrap_or(current_metric_val)));
                     }
 
                     if max_val.is_some() && min_val.is_some() {

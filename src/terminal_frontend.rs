@@ -14,7 +14,7 @@ use tui::backend::CrosstermBackend;
 use tui::layout::{Constraint, Direction, Layout};
 use tui::style::{Color, Modifier, Style};
 use tui::text::Span;
-use tui::widgets::{Axis, Block, Borders, Cell, Chart, Dataset, Row, Table, TableState};
+use tui::widgets::{Axis, Block, Borders, Cell, Chart, Dataset, GraphType, Row, Table, TableState};
 use tui::{symbols, Frame, Terminal};
 
 use crate::backend::{Backend, MetricAdapter};
@@ -42,6 +42,8 @@ struct UiState {
     current_metric_history_data: Vec<(f64, f64)>,
 
     current_metric_history_range: (f64, f64),
+
+    current_metric_history_time_range: (f64, f64),
 
     graph_active: bool,
 }
@@ -102,6 +104,7 @@ impl UiState {
             rows: Vec::new(),
             current_metric_history_data: Vec::new(),
             current_metric_history_range: (1.0f64, 1.0f64),
+            current_metric_history_time_range: (0.0f64, 0.0f64),
             graph_active: false,
         }
     }
@@ -146,16 +149,18 @@ impl UiState {
             MetricTableRowState { cells }
         });
 
-        // if let Some(selection) = self.table_state.selected() {
-        //     if let Some(row_data) = self.rows.get(selection) {
-        //         if let Some(limits) = metric_backend
-        //             .get_metric_history(&row_data.cells[0], &mut self.current_metric_history_data)
-        //         {
-        //             self.current_metric_history_range = limits;
-        //             self.graph_active = true;
-        //         }
-        //     }
-        // }
+        if let Some(selection) = self.table_state.selected() {
+            if let Some(row_data) = self.rows.get(selection) {
+                if let Some(limits) = metric_backend
+                    .get_metric_history(&row_data.cells[0], &mut self.current_metric_history_data, 64)
+                {
+                    self.current_metric_history_range = limits;
+                    self.current_metric_history_time_range.0 = self.current_metric_history_data[0].0;
+                    self.current_metric_history_time_range.1 = self.current_metric_history_data[self.current_metric_history_data.len() - 1].0;
+                    self.graph_active = true;
+                }
+            }
+        }
     }
 }
 
@@ -169,7 +174,7 @@ impl TerminalFrontend {
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)].as_ref())
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
             .split(size);
 
         let selected_style = Style::default().add_modifier(Modifier::REVERSED);
@@ -200,27 +205,29 @@ impl TerminalFrontend {
 
         if ui_state.graph_active {
             let dataset = Dataset::default()
-                .name("History")
-                .marker(symbols::Marker::Dot)
+                .name("History")//.marker(symbols::Marker::Dot)
+                .graph_type(GraphType::Line)
                 .style(Style::default().fg(Color::Red))
                 .data(&ui_state.current_metric_history_data);
 
-            let min_timestamp = ui_state.current_metric_history_data
-                [ui_state.current_metric_history_data.len() - 1]
-                .0;
-            let max_timestamp = ui_state.current_metric_history_data[0].0;
+            let min_timestamp = ui_state.current_metric_history_time_range.0;
+            let max_timestamp = ui_state.current_metric_history_time_range.1;
 
             let x_labels = vec![
                 Span::styled(
-                    format!("{}", min_timestamp),
+                    format!("{:.2}", min_timestamp),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(format!("{}", (max_timestamp + min_timestamp) / 2.0)),
                 Span::styled(
-                    format!("{}", max_timestamp),
+                    format!("{:.2}", max_timestamp),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
             ];
+
+            // Create a 5% margin above and below actual value range
+            let y_range = ui_state.current_metric_history_range.1 - ui_state.current_metric_history_range.0;
+            let y_limit_min = ui_state.current_metric_history_range.0 - (y_range * 0.05);
+            let y_limit_max = ui_state.current_metric_history_range.1 + (y_range * 0.05);
 
             let chart = Chart::new(vec![dataset])
                 .block(
@@ -236,7 +243,7 @@ impl TerminalFrontend {
                         .title("X Axis")
                         .style(Style::default().fg(Color::Gray))
                         .labels(x_labels)
-                        .bounds([max_timestamp, min_timestamp]),
+                        .bounds([min_timestamp, max_timestamp]),
                 )
                 .y_axis(
                     Axis::default()
@@ -244,18 +251,17 @@ impl TerminalFrontend {
                         .style(Style::default().fg(Color::Gray))
                         .labels(vec![
                             Span::styled(
-                                format!("{}", ui_state.current_metric_history_range.0),
+                                format!("{:.1}", y_limit_min),
                                 Style::default().add_modifier(Modifier::BOLD),
                             ),
-                            Span::raw("mittel"),
                             Span::styled(
-                                format!("{}", ui_state.current_metric_history_range.1),
+                                format!("{:.1}", y_limit_max),
                                 Style::default().add_modifier(Modifier::BOLD),
                             ),
                         ])
                         .bounds([
-                            ui_state.current_metric_history_range.0,
-                            ui_state.current_metric_history_range.1,
+                            y_limit_min,
+                            y_limit_max,
                         ]),
                 );
 
@@ -296,7 +302,7 @@ impl Drop for TerminalFrontend {
 
 impl MetricFrontend for TerminalFrontend {
     fn run(mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let tick_rate = Duration::from_millis(200);
+        let tick_rate = Duration::from_millis(250);
 
         let mut last_tick = Instant::now();
 
@@ -318,7 +324,7 @@ impl MetricFrontend for TerminalFrontend {
             if crossterm::event::poll(timeout).unwrap_or(false) {
                 if let Event::Key(key) = event::read().unwrap() {
                     match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                        KeyCode::Char('q') | KeyCode::Esc => break,
                         KeyCode::Down => {
                             ui_state.select_next();
                         }
@@ -338,5 +344,9 @@ impl MetricFrontend for TerminalFrontend {
                 last_tick = Instant::now();
             }
         }
+
+        self.backend.disconnect();
+
+        Ok(())
     }
 }

@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["terminal_frontend"]
+default = ["terminal_frontend", "graphical_frontend"]
 terminal_frontend = ["tui", "crossterm"]
+graphical_frontend = ["egui_glow", "glutin", "egui"]
 
 [dependencies]
 tokio = { version = "1.14.0", features = ["full"] }
@@ -14,3 +15,6 @@ zeromq = "0.3.3"
 json = "0.12.4"
 crossterm = { version = "0.22.1", optional = true }
 tui = {version = "0.16.0", features = ["crossterm"], optional = true }
+egui_glow = {version = "0.16.0", features = ["clipboard", "default_fonts", "winit"], optional = true}
+glutin = {version = "0.28.0", optional = true}
+egui = {version = "0.16.0", optional = true}

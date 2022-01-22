@@ -28,6 +28,7 @@ use tui::layout::{Constraint, Direction, Layout};
 use tui::style::{Color, Modifier, Style};
 use zeromq::{Socket, SocketRecv, ZmqResult};
 use crate::frontend::MetricFrontend;
+use crate::gui_frontend::GraphicalFrontend;
 use crate::terminal_frontend::{TerminalFrontend, TerminalFrontendOptions};
 
 mod aggregator;
@@ -39,6 +40,9 @@ mod frontend;
 
 #[cfg(feature = "terminal_frontend")]
 mod terminal_frontend;
+
+#[cfg(feature = "graphical_frontend")]
+mod gui_frontend;
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ArgEnum)]
 enum FrontEndOption {
@@ -85,8 +89,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         let frontend = TerminalFrontend::create(metric_backend)?;
 
         frontend.run()?;
-    }
+    } else if args.frontend == FrontEndOption::GUI {
+        let frontend = GraphicalFrontend::create(metric_backend)?;
 
+        frontend.run()?;
+    }
 
     Ok(())
 }

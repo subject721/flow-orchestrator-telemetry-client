@@ -3,6 +3,7 @@ use crate::common::metric::Metric;
 use crate::source::endpoint::Endpoint;
 use crate::{source, MetricAggregator};
 use std::fmt::{Debug, Display, Formatter};
+use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
 use tokio::select;
@@ -10,7 +11,10 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use zeromq::ZmqError;
 
+type CbType = Box<dyn Fn() + Send + 'static>;
+
 pub struct Backend {
+
     rt: tokio::runtime::Runtime,
 
     aggregator: Arc<Mutex<MetricAggregator>>,
@@ -18,6 +22,8 @@ pub struct Backend {
     task_join_handle: Option<JoinHandle<()>>,
 
     quit_signal: Option<oneshot::Sender<()>>,
+
+    callbacks: Arc<Mutex<Vec<CbType>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -33,21 +39,26 @@ impl Display for Error {
 
 impl std::error::Error for Error {}
 
-
 pub trait MetricAdapter {
     // Name of the metric that's encapsulated
     fn get_name(&self) -> &String;
 
-    fn update_current(&mut self, metric : &Metric);
+    fn update_current(&mut self, metric: &Metric);
 }
 
 impl Backend {
     pub fn new() -> Backend {
         Backend {
-            rt: tokio::runtime::Builder::new_multi_thread().enable_io().enable_time().worker_threads(1).build().unwrap()/*Runtime::new().unwrap()*/,
+            rt: tokio::runtime::Builder::new_multi_thread()
+                .enable_io()
+                .enable_time()
+                .worker_threads(1)
+                .build()
+                .unwrap(), /*Runtime::new().unwrap()*/
             aggregator: Arc::new(Mutex::new(MetricAggregator::new())),
             task_join_handle: None,
             quit_signal: None,
+            callbacks: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -78,12 +89,15 @@ impl Backend {
 
                 let aggregator = Arc::clone(&self.aggregator);
 
+                let callbacks = Arc::clone(&self.callbacks);
+
                 let (quit_signal, quit_signal_receiver) = oneshot::channel::<()>();
 
                 self.quit_signal = Some(quit_signal);
 
                 self.task_join_handle = Some(self.rt.spawn(async move {
-                    Backend::receiver_handler(endpoint, quit_signal_receiver, aggregator).await
+                    Backend::receiver_handler(endpoint, quit_signal_receiver, aggregator, callbacks)
+                        .await
                 }));
             } else {
                 return Err(Error {
@@ -93,6 +107,12 @@ impl Backend {
         }
 
         Ok(())
+    }
+
+    pub fn add_callback(&self, cb : CbType) {
+        let mut callbacks_local = self.callbacks.lock().unwrap();
+
+        callbacks_local.push(cb);
     }
 
     pub fn visit_metrics(&self, cb: impl Fn(&Metric)) {
@@ -116,10 +136,15 @@ impl Backend {
         v
     }
 
-    pub fn get_metric_history(&self, name : &str, history_data : &mut Vec<(f64, f64)>) -> Option<(f64, f64)> {
+    pub fn get_metric_history(
+        &self,
+        name: &str,
+        history_data: &mut Vec<(f64, f64)>,
+        max_len: usize,
+    ) -> Option<(f64, f64)> {
         let aggregator_local = self.aggregator.lock().unwrap();
 
-        aggregator_local.get_metric_history(name, history_data)
+        aggregator_local.get_metric_history(name, history_data, max_len)
     }
 
     pub fn get_last_timestamp(&self) -> u64 {
@@ -128,15 +153,14 @@ impl Backend {
         aggregator_local.get_last_timestamp()
     }
 
-    pub fn fetch_updates<T>(&self, mut foreign_it : T)
+    pub fn fetch_updates<T>(&self, mut foreign_it: T)
     where
         T: Iterator,
-        T::Item: AsMut<dyn MetricAdapter>
+        T::Item: AsMut<dyn MetricAdapter>,
     {
         let aggregator_local = self.aggregator.lock().unwrap();
 
         while let Some(mut element) = foreign_it.next() {
-
             if let Some(metric) = aggregator_local.get_metric(element.as_mut().get_name()) {
                 element.as_mut().update_current(metric);
             }
@@ -148,7 +172,9 @@ impl Backend {
             signal.send(()).unwrap();
 
             if self.task_join_handle.is_some() {
-                self.rt.block_on(self.task_join_handle.take().unwrap()).unwrap();
+                self.rt
+                    .block_on(self.task_join_handle.take().unwrap())
+                    .unwrap();
             }
         }
     }
@@ -157,6 +183,7 @@ impl Backend {
         mut endpoint: Endpoint,
         quit_signal_receiver: oneshot::Receiver<()>,
         aggregator: Arc<Mutex<MetricAggregator>>,
+        callbacks: Arc<Mutex<Vec<CbType>>>,
     ) {
         let mut local_metrics = Vec::new();
 
@@ -187,6 +214,12 @@ impl Backend {
                             let mut aggregator_local = aggregator.lock().unwrap();
 
                             aggregator_local.handle_metrics(timestamp, local_metrics.as_slice());
+
+                            let callbacks_local = callbacks.lock().unwrap();
+
+                            for cb in callbacks_local.deref() {
+                                cb();
+                            }
 
                             local_metrics.clear();
                         }
