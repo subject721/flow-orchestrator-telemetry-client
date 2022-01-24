@@ -1,17 +1,19 @@
-use crate::aggregator::aggregator::MetricIterator;
+
 use crate::common::metric::Metric;
 use crate::source::endpoint::Endpoint;
 use crate::{source, MetricAggregator};
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
-use tokio::runtime::Runtime;
 use tokio::select;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use zeromq::ZmqError;
 
-type CbType = Box<dyn Fn() + Send + 'static>;
+//type CbType = dyn Fn() + Send + 'static;
+
+pub type MetricCallback = dyn Fn() + Send + 'static;
+
 
 pub struct Backend {
 
@@ -23,7 +25,7 @@ pub struct Backend {
 
     quit_signal: Option<oneshot::Sender<()>>,
 
-    callbacks: Arc<Mutex<Vec<CbType>>>,
+    callbacks: Arc<Mutex<Vec<Box<MetricCallback>>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -109,10 +111,10 @@ impl Backend {
         Ok(())
     }
 
-    pub fn add_callback(&self, cb : CbType) {
+    pub fn add_callback<T : Fn() + Send + 'static>(&self, cb : T) {
         let mut callbacks_local = self.callbacks.lock().unwrap();
 
-        callbacks_local.push(cb);
+        callbacks_local.push(Box::new(cb));
     }
 
     pub fn visit_metrics(&self, cb: impl Fn(&Metric)) {
@@ -183,7 +185,7 @@ impl Backend {
         mut endpoint: Endpoint,
         quit_signal_receiver: oneshot::Receiver<()>,
         aggregator: Arc<Mutex<MetricAggregator>>,
-        callbacks: Arc<Mutex<Vec<CbType>>>,
+        callbacks: Arc<Mutex<Vec<Box<MetricCallback>>>>,
     ) {
         let mut local_metrics = Vec::new();
 

@@ -1,8 +1,6 @@
-use std::io::Error;
+
 use crate::common::message::MetricMessage;
-use std::net::IpAddr;
 use tokio::sync::mpsc::error::TrySendError;
-use tokio::task;
 use zeromq::{Socket, SocketRecv, ZmqError};
 
 const SUB_NAME_METRICS: &str = "metrics";

@@ -4,18 +4,16 @@ use crossterm::terminal::{
 };
 use crossterm::{event, execute};
 use std::borrow::BorrowMut;
-use std::collections::LinkedList;
 use std::fmt::{Display, Formatter};
 use std::io;
 use std::io::{Error, Stdout};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tui::backend::CrosstermBackend;
 use tui::layout::{Constraint, Direction, Layout};
 use tui::style::{Color, Modifier, Style};
 use tui::text::Span;
 use tui::widgets::{Axis, Block, Borders, Cell, Chart, Dataset, GraphType, Row, Table, TableState};
-use tui::{symbols, Frame, Terminal};
+use tui::{Frame, Terminal};
 
 use crate::backend::{Backend, MetricAdapter};
 use crate::common::metric::Metric;

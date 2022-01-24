@@ -1,18 +1,20 @@
 use egui_glow::{glow, EguiGlow};
 use glutin::event::Event;
 use glutin::event_loop::{ControlFlow, EventLoop};
-use glutin::{Context, ContextCurrentState, WindowedContext};
-use std::any::TypeId;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::ops::Add;
-use std::time::{Duration, Instant};
-use egui::Align;
+use egui::{ScrollArea, Ui, WidgetText};
+use egui::plot::{Corner, Legend, Line, Plot, Value, Values};
 use glutin::platform::run_return::EventLoopExtRunReturn;
 
 use crate::MetricFrontend;
 
 use crate::backend::Backend;
+use crate::common::metric::Metric;
+
+pub trait View {
+    fn ui(&mut self, ui: &mut egui::Ui);
+}
 
 #[derive(Debug)]
 pub struct FrontendError {
@@ -28,9 +30,9 @@ pub struct GraphicalFrontendInternal{
 
     egui : EguiGlow,
 
-    counter : usize,
+    selection : usize,
 
-    selection : usize
+    metric_list : MetricWidget
 }
 
 pub struct GraphicalFrontend {
@@ -38,6 +40,13 @@ pub struct GraphicalFrontend {
     event_loop : EventLoop<()>,
 
     internal : GraphicalFrontendInternal
+}
+
+
+struct MetricWidget {
+    metrics : Vec<Metric>,
+
+    selected_metric : Option<String>
 }
 
 impl From<&dyn std::error::Error> for FrontendError {
@@ -71,9 +80,9 @@ impl GraphicalFrontend {
 
         let event_proxy = event_loop.create_proxy();
 
-        metric_backend.add_callback(Box::new(move ||{
-            event_proxy.send_event(());
-        }));
+        metric_backend.add_callback(move ||{
+            event_proxy.send_event(()).unwrap();
+        });
 
         Ok(GraphicalFrontend {
             event_loop,
@@ -82,8 +91,8 @@ impl GraphicalFrontend {
                 window: gl_window,
                 gl_context: context,
                 egui,
-                counter : 0,
-                selection : 0
+                selection : 0,
+                metric_list : MetricWidget::default()
             }
         })
     }
@@ -126,6 +135,71 @@ impl GraphicalFrontend {
 
 }
 
+impl Default for MetricWidget {
+    fn default() -> Self {
+        MetricWidget {
+            metrics : vec!(),
+            selected_metric : None
+        }
+    }
+}
+
+impl View for MetricWidget {
+    fn ui(&mut self, ui: &mut Ui) {
+        let scroll_area = ScrollArea::vertical()
+            .max_height(400.0)
+            .auto_shrink([false, true]);
+
+        scroll_area.show(ui, |ui| {
+
+            ui.vertical(|ui| {
+
+                let mut new_selection = None;
+                let mut add_to_clipboard = false;
+
+                {
+                    let selected_name = self.selected_metric.as_ref().map(|s| { s.as_str() }).unwrap_or("");
+
+                    for metric in &self.metrics {
+                        let response =
+                            ui.selectable_label(selected_name == metric.get_label(), WidgetText::from(metric.to_string()).monospace());
+
+                        if response.clicked() {
+                            new_selection = Some(metric.get_label());
+
+                            if response.double_clicked() {
+                                add_to_clipboard = true
+                            }
+                        }
+                    }
+                }
+
+                if let Some(new_selection) = new_selection {
+                    self.selected_metric = Some(new_selection.to_string());
+
+                    if add_to_clipboard {
+                        let mut o = ui.output();
+
+                        o.copied_text = new_selection.to_string();
+                    }
+                }
+            });
+        });
+
+        ui.separator();
+    }
+}
+
+impl MetricWidget {
+    pub fn update_metrics(&mut self, metrics : Vec<Metric>) {
+        self.metrics = metrics;
+    }
+
+    pub fn get_selection(&self) -> Option<&String> {
+        self.selected_metric.as_ref()
+    }
+}
+
 impl GraphicalFrontendInternal {
     fn event_handle(&mut self, event: Event<'_, ()>, control_flow: &mut ControlFlow) {
 
@@ -163,71 +237,77 @@ impl GraphicalFrontendInternal {
     }
 
     fn redraw(&mut self, control_flow: &mut ControlFlow) {
-        let mut clear_color = [0.1, 0.1, 0.1];
-
+        let clear_color = [0.1, 0.1, 0.1];
 
         let mut quit = false;
 
-            let needs_repaint = self.egui.run(self.window.window(), |egui_ctx| {
-                egui::SidePanel::left("my_side_panel").show(egui_ctx, |ui| {
-                    ui.heading("Hello World!");
-                    ui.label(format!("counter = {}", self.counter));
-                    if ui.button("Quit").clicked() {
-                        quit = true;
-                    }
-                });
+        self.metric_list.update_metrics(self.metric_backend.map_metrics(|m|{ m.clone() }));
 
-                egui::CentralPanel::default().show(&egui_ctx, |ui| {
-                    ui.vertical_centered_justified(|ui|{
-                        let metric_data = self.metric_backend.map_metrics(|m|{
-                            (m.get_label().to_string(), m.get_value().to_string(), m.get_unit().to_string())
-                        });
-                        ui.columns(3, |columns|{
-                            let mut metric_id = 0;
-                            for m in metric_data {
-                                let c = columns[0].selectable_label(self.selection == metric_id,m.0);
-                                columns[1].selectable_label(self.selection == metric_id,m.1);
-                                columns[2].selectable_label(self.selection == metric_id,m.2);
+        let needs_repaint = self.egui.run(self.window.window(), |egui_ctx| {
 
-                                if c.clicked() {
-                                    self.selection = metric_id;
-                                }
-
-                                metric_id += 1;
-                            }
-                        });
+            egui::TopBottomPanel::top("top_panel").show(egui_ctx, |ui| {
+                egui::menu::bar(ui, |ui| {
+                    ui.menu_button("File", |ui| {
+                        if ui.button("Quit").clicked() {
+                            quit = true;
+                        }
                     });
                 });
             });
 
-            *control_flow = if quit {
-                glutin::event_loop::ControlFlow::Exit
-            } else if needs_repaint.0 {
-                self.window.window().request_redraw();
-                glutin::event_loop::ControlFlow::Poll
-            } else {
-                glutin::event_loop::ControlFlow::Wait
-            };
+            egui::SidePanel::left("side_panel").show(egui_ctx, |ui| {
+                ui.heading("Flow Orchestrator Metric Client");
+
+            });
+
+            egui::CentralPanel::default().show(&egui_ctx, |ui| {
+                ui.vertical_centered_justified(|ui|{
+
+                    self.metric_list.ui(ui);
+
+                    if let Some(selection) = self.metric_list.get_selection() {
+                        let mut history_data = vec!();
+                        let max_history_len = 128;
+
+                        if let Some(_limits) = self.metric_backend.get_metric_history(selection, &mut history_data, max_history_len) {
+
+                            let plot_data : Vec<_> = history_data.iter().map(|m|{Value::new(m.0, m.1)}).collect();
+                            let lines = Line::new(Values::from_values(plot_data));
+
+                             let plot = Plot::new("metric_plot")
+                            .legend(Legend::default().position(Corner::RightBottom))
+                             .show_x(true)
+                             .show_y(true).allow_drag(false).allow_zoom(false);
+                             plot.show(ui, |plot_ui| {
+                                 plot_ui.line(lines.name(selection));
+                             });
+                        }
+                    }
+                });
+            });
+        });
+
+        *control_flow = if quit {
+            glutin::event_loop::ControlFlow::Exit
+        } else if needs_repaint.0 {
+            self.window.window().request_redraw();
+            glutin::event_loop::ControlFlow::Poll
+        } else {
+            glutin::event_loop::ControlFlow::Wait
+        };
 
 
-
-            {
-                unsafe {
-                    use glow::HasContext as _;
-                    self.gl_context.clear_color(clear_color[0], clear_color[1], clear_color[2], 1.0);
-                    self.gl_context.clear(glow::COLOR_BUFFER_BIT);
-                }
-
-                // draw things behind egui here
-
-                self.egui.paint(&self.window, &self.gl_context, needs_repaint.1);
-
-                self.counter += 1;
-
-                // draw things on top of egui here
-
-                self.window.swap_buffers().unwrap();
+        {
+            unsafe {
+                use glow::HasContext as _;
+                self.gl_context.clear_color(clear_color[0], clear_color[1], clear_color[2], 1.0);
+                self.gl_context.clear(glow::COLOR_BUFFER_BIT);
             }
+
+            self.egui.paint(&self.window, &self.gl_context, needs_repaint.1);
+
+            self.window.swap_buffers().unwrap();
+        }
     }
 }
 

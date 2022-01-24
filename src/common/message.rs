@@ -1,4 +1,5 @@
 
+#[allow(unused_variables)]
 pub struct MetricMessage {
     src: String,
     subscription: String,

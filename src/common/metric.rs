@@ -2,8 +2,6 @@ use json;
 use json::{JsonError, JsonValue};
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
-use std::slice::Iter;
-use std::str::FromStr;
 use std::string::String;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -309,7 +307,7 @@ impl TryFrom<&json::JsonValue> for Metric {
                 let metric_value_obj = &obj["value"];
                 let unit_field = &obj["unit"];
 
-                return if let Some(label_str) = label_field {
+                if let Some(label_str) = label_field {
                     Ok(Metric {
                         label: label_str.to_string(),
                         unit: MetricUnit::try_from(unit_field)?,
@@ -317,7 +315,7 @@ impl TryFrom<&json::JsonValue> for Metric {
                     })
                 } else {
                     Err(Self::Error::WrongType("invalid json type".to_string()))
-                };
+                }
             }
             _ => Err(Self::Error::WrongType("invalid json type".to_string())),
         }

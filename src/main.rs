@@ -1,35 +1,15 @@
-#![allow(dead_code, unused_imports)]
+#![allow(dead_code)]
 
-use clap;
-use clap::{Parser, ArgEnum};
+use std::error::Error;
+
+use std::time::{Duration};
+
+use clap::{ArgEnum, Parser};
 
 use crate::aggregator::aggregator::MetricAggregator;
-use crate::common::message::MetricMessage;
-use crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event, KeyCode};
-use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
-};
-use crossterm::{event, execute};
-use std::error::Error;
-use std::fmt::Debug;
-use std::io;
-use std::io::ErrorKind;
-use std::ops::DerefMut;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-use tokio::runtime::Runtime;
-use tokio::sync::mpsc;
-use tokio::{select, task};
-use tui::backend::{Backend, CrosstermBackend};
-use tui::text::Spans;
-use tui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
-use tui::{Frame, Terminal};
-use tui::layout::{Constraint, Direction, Layout};
-use tui::style::{Color, Modifier, Style};
-use zeromq::{Socket, SocketRecv, ZmqResult};
 use crate::frontend::MetricFrontend;
 use crate::gui_frontend::GraphicalFrontend;
-use crate::terminal_frontend::{TerminalFrontend, TerminalFrontendOptions};
+use crate::terminal_frontend::{TerminalFrontend};
 
 mod aggregator;
 
@@ -46,7 +26,7 @@ mod gui_frontend;
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ArgEnum)]
 enum FrontEndOption {
-    TRIVIAL,
+    TEST,
 
     #[cfg(feature = "terminal_frontend")]
     TUI,
@@ -75,7 +55,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     metric_backend.connect(args.endpoint_addr).unwrap();
 
-    if args.frontend == FrontEndOption::TRIVIAL {
+    if args.frontend == FrontEndOption::TEST {
         loop {
             println!("last timestamp: {}", metric_backend.get_last_timestamp());
 
