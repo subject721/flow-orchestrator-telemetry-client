@@ -1,21 +1,35 @@
+use crate::common::metric::{Metric};
 
 #[allow(unused_variables)]
-pub struct MetricMessage {
+
+
+
+pub struct MetricCollection {
     src: String,
     subscription: String,
-    data: Vec<u8>,
+    timestamp: u64,
+    metrics: Vec<Metric>,
 }
 
-impl MetricMessage {
-    pub fn new(src: String, subscription: String, data: Vec<u8>) -> MetricMessage {
-        MetricMessage {
+impl MetricCollection {
+    pub fn new(src: String, subscription: String, timestamp: u64, metrics: Vec<Metric>) -> MetricCollection {
+        MetricCollection {
             src,
             subscription,
-            data,
+            timestamp,
+            metrics,
         }
     }
 
-    pub fn get_data(&self) -> &Vec<u8> {
-        &self.data
+    pub fn get_timestamp(&self) -> u64 {
+        self.timestamp
+    }
+
+    pub fn get_metrics_ref(&self) -> &Vec<Metric> {
+        &self.metrics
+    }
+
+    pub fn get_metrics(self) -> Vec<Metric> {
+        self.metrics
     }
 }

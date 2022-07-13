@@ -1,14 +1,17 @@
 
 use crate::common::metric::Metric;
-use crate::source::endpoint::Endpoint;
+use crate::source::zmq_endpoint::ZmqEndpoint;
 use crate::{source, MetricAggregator};
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
-use tokio::select;
+use std::time::Duration;
+use tokio::{select, task, time};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 use zeromq::ZmqError;
+use crate::source::prometheus_poll_endpoint::PrometheusPollEndpoint;
 
 //type CbType = dyn Fn() + Send + 'static;
 
@@ -16,8 +19,6 @@ pub type MetricCallback = dyn Fn() + Send + 'static;
 
 
 pub struct Backend {
-
-    rt: tokio::runtime::Runtime,
 
     aggregator: Arc<Mutex<MetricAggregator>>,
 
@@ -51,12 +52,6 @@ pub trait MetricAdapter {
 impl Backend {
     pub fn new() -> Backend {
         Backend {
-            rt: tokio::runtime::Builder::new_multi_thread()
-                .enable_io()
-                .enable_time()
-                .worker_threads(1)
-                .build()
-                .unwrap(), /*Runtime::new().unwrap()*/
             aggregator: Arc::new(Mutex::new(MetricAggregator::new())),
             task_join_handle: None,
             quit_signal: None,
@@ -64,14 +59,15 @@ impl Backend {
         }
     }
 
-    pub fn connect<T: ToString>(&mut self, dst: T) -> Result<(), Error> {
+    pub async fn connect<T: ToString>(&mut self, dst: T) -> Result<(), Error> {
         if self.task_join_handle.is_some() {
             return Err(Error {
                 msg: String::from("already connected"),
             });
         }
 
-        let endpoint = source::endpoint::Endpoint::new(&dst.to_string());
+        //let endpoint = source::zmq_endpoint::ZmqEndpoint::new(&dst.to_string());
+        let endpoint = source::prometheus_poll_endpoint::PrometheusPollEndpoint::new(&dst.to_string());
 
         if endpoint.is_err() {
             return Err(Error {
@@ -80,14 +76,9 @@ impl Backend {
         } else {
             let mut endpoint = endpoint.unwrap();
 
-            let connect_result: Result<Endpoint, ZmqError> = self.rt.block_on(async move {
-                endpoint.connect().await?;
+            //let connect_result: Result<(), ZmqError> = endpoint.connect().await;
 
-                Ok(endpoint)
-            });
-
-            if connect_result.is_ok() {
-                let endpoint = connect_result.unwrap();
+            //if connect_result.is_ok() {
 
                 let aggregator = Arc::clone(&self.aggregator);
 
@@ -97,15 +88,15 @@ impl Backend {
 
                 self.quit_signal = Some(quit_signal);
 
-                self.task_join_handle = Some(self.rt.spawn(async move {
-                    Backend::receiver_handler(endpoint, quit_signal_receiver, aggregator, callbacks)
+                self.task_join_handle = Some(task::spawn(async move {
+                    Self::receiver_handler(endpoint, quit_signal_receiver, aggregator, callbacks)
                         .await
                 }));
-            } else {
-                return Err(Error {
-                    msg: format!("{:?}", connect_result.err().unwrap()),
-                });
-            }
+            //} else {
+            //    return Err(Error {
+            //        msg: format!("{:?}", connect_result.err().unwrap()),
+            //    });
+            //}
         }
 
         Ok(())
@@ -169,75 +160,92 @@ impl Backend {
         }
     }
 
-    pub fn disconnect(&mut self) {
+    pub async fn disconnect(&mut self) {
         if let Some(signal) = self.quit_signal.take() {
             signal.send(()).unwrap();
 
             if self.task_join_handle.is_some() {
-                self.rt
-                    .block_on(self.task_join_handle.take().unwrap())
-                    .unwrap();
+
+                let jh = self.task_join_handle.take().unwrap();
+
+                let result = jh.await;
+
+                if result.is_err() {
+                    // wahtever
+                }
             }
         }
     }
 
     async fn receiver_handler(
-        mut endpoint: Endpoint,
+        mut endpoint: PrometheusPollEndpoint,
         quit_signal_receiver: oneshot::Receiver<()>,
         aggregator: Arc<Mutex<MetricAggregator>>,
         callbacks: Arc<Mutex<Vec<Box<MetricCallback>>>>,
     ) {
-        let mut local_metrics = Vec::new();
 
         let mut quit_signal_receiver = quit_signal_receiver;
 
+        let recv_timeout = Duration::from_secs(1);
+
+        let sleep = time::sleep(recv_timeout.clone());
+        tokio::pin!(sleep);
+
         loop {
+            let mut do_reconnect = false;
+
             select! {
                 msg = endpoint.recv_msg() => {
-                    if let Ok(msg) = msg {
-                        let s = String::from_utf8(msg.get_data().clone());
+                    if let Ok(msg) = &msg {
+                        sleep.as_mut().reset(Instant::now() + recv_timeout.clone());
 
-                        if let Ok(s) = s {
+                        //let s = String::from_utf8(msg.get_data().clone());
 
-                        let json_obj = json::parse(&s);
 
-                        if let Ok(json_obj) = json_obj {
-                            let timestamp_entry = &json_obj["timestamp"];
-                            let values_entry = &json_obj["values"];
+                        //let json_obj = json::parse(&s);
 
-                            let timestamp = timestamp_entry.as_u64().unwrap_or(0);
+                        //if let Ok(json_obj) = json_obj {
 
-                            for value_entry in values_entry.members() {
-                                if let Ok(metric) = Metric::try_from(value_entry) {
-                                    local_metrics.push(metric);
-                                }
-                            }
+                        let mut aggregator_local = aggregator.lock().unwrap();
 
-                            let mut aggregator_local = aggregator.lock().unwrap();
+                        aggregator_local.handle_metrics(msg.get_timestamp(), msg.get_metrics_ref().as_slice());
 
-                            aggregator_local.handle_metrics(timestamp, local_metrics.as_slice());
+                        let callbacks_local = callbacks.lock().unwrap();
 
-                            let callbacks_local = callbacks.lock().unwrap();
-
-                            for cb in callbacks_local.deref() {
-                                cb();
-                            }
-
-                            local_metrics.clear();
+                        for cb in callbacks_local.deref() {
+                            cb();
                         }
-                    }
+
+                        //}
+
+                    } else if let Err(err) = &msg {
+                        println!("Endpoint error: {:?}", err);
+
+                        do_reconnect = true;
                     }
                 },
                 _ = (&mut quit_signal_receiver) => {
+                    println!("Quit signal received");
                     break;
+                },
+                _ = (&mut sleep) => {
+                    println!("Timeout elapsed");
+
+                    do_reconnect = true;
+
+                    sleep.as_mut().reset(Instant::now() + recv_timeout.clone());
                 }
             }
-        }
-    }
-}
+/*
+            if do_reconnect {
+                let result = endpoint.try_reconnect().await;
 
-impl Drop for Backend {
-    fn drop(&mut self) {
-        self.disconnect()
+                if let Err(err) = result {
+                    println!("Could not reconnect: {:?}", err);
+
+                    break;
+                }
+            }*/
+        }
     }
 }

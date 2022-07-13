@@ -51,9 +51,24 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let args = Cli::parse();
 
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_io()
+                .enable_time()
+                .worker_threads(1)
+                .build()
+                .unwrap(); /*Runtime::new().unwrap()*/
+
     let mut metric_backend = backend::Backend::new();
 
-    metric_backend.connect(args.endpoint_addr).unwrap();
+    let connect_result = runtime.block_on(async {
+        metric_backend.connect(args.endpoint_addr).await
+    });
+
+    if connect_result.is_err() {
+        println!("Connection failed: {:?}", connect_result.err());
+
+        return Err(Box::new(backend::Error{msg: "Nix connection".to_string()}))
+    }
 
     if args.frontend == FrontEndOption::TEST {
         loop {
@@ -74,6 +89,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         frontend.run()?;
     }
+
+    runtime.shutdown_timeout(Duration::from_secs(5));
 
     Ok(())
 }

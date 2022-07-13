@@ -22,8 +22,8 @@ enum MetricStorage {
 }
 
 struct MetricEntry {
-    storage : MetricStorage,
-    parent_metric : Option<String>,
+    storage: MetricStorage,
+    parent_metric: Option<String>,
 
 }
 
@@ -66,15 +66,15 @@ impl<'a> Iterator for MetricIterator<'a> {
 }
 
 impl MetricEntry {
-    fn new(storage : MetricStorage, parent_metric : Option<String>) -> MetricEntry {
+    fn new(storage: MetricStorage, parent_metric: Option<String>) -> MetricEntry {
         MetricEntry {
             storage,
-            parent_metric
+            parent_metric,
         }
     }
 }
 
-const DEFAULT_MAX_HISTORY: usize = 512;
+const DEFAULT_MAX_HISTORY: usize = 128;
 
 const DEFAULT_DELTAT: u64 = 250000;
 
@@ -95,9 +95,9 @@ fn metric_from_time_diff(
         _ => OrderOfMagnitude::One,
     };
 
-    let correction_factor = 1.0f64 / order_of_magnitude.get_factor();
+    let scaling = 1.0f64 / order_of_magnitude.get_factor();
 
-    let rate_value = ((correction_factor * value_diff) / time_diff_s) as i64;
+    let rate_value = ((scaling * value_diff) / time_diff_s) as i64;
 
     Some(Metric::new(
         dst_name.to_string(),
@@ -110,7 +110,7 @@ fn metric_from_time_diff(
     ))
 }
 
-fn metric_from_avg(value : f64, src_unit : &MetricUnit, dst_name : &str) -> Option<Metric> {
+fn metric_from_avg(value: f64, src_unit: &MetricUnit, dst_name: &str) -> Option<Metric> {
     Some(Metric::new(dst_name.to_string(), src_unit.clone(), MetricValue::Number(value)))
 }
 
@@ -141,10 +141,8 @@ impl MetricAggregator {
         self.handle_auto_rules();
     }
 
-    fn handle_incoming_metric(&mut self, metric: &Metric, parent_metric : &Option<String>) {
-
+    fn handle_incoming_metric(&mut self, metric: &Metric, parent_metric: &Option<String>) {
         if let Some(metric_entry) = self.metrics.get_mut(metric.get_label()) {
-
             let metric_storage = &mut metric_entry.storage;
 
             match metric_storage {
@@ -161,7 +159,6 @@ impl MetricAggregator {
                     *current = metric.clone();
                 }
             }
-
         } else {
             let metric_unit = metric.get_unit();
 
@@ -196,13 +193,14 @@ impl MetricAggregator {
         {
             if std::mem::discriminant(current.get_value()) == std::mem::discriminant(&MetricValue::Number(0f64)) ||
                 std::mem::discriminant(current.get_value()) == std::mem::discriminant(&MetricValue::Integer(0)) {
-
                 if current.get_unit().get_raw_unit().1 != &MetricRawUnit::Seconds {
-                    self.auto_metric_rules.push(AutoMetricRule {
-                        src_metric_name: current.get_label().to_string(),
-                        dst_metric_name: format!("{}-ps", current.get_label()),
-                        rule_type: AutoMetricRuleType::TimeDifferentiate,
-                    });
+                    if current.get_unit().get_raw_unit().0 != &MetricRawUnit::None && current.get_unit().get_raw_unit().0 != &MetricRawUnit::Seconds {
+                        self.auto_metric_rules.push(AutoMetricRule {
+                            src_metric_name: current.get_label().to_string(),
+                            dst_metric_name: format!("{}-ps", current.get_label()),
+                            rule_type: AutoMetricRuleType::TimeDifferentiate,
+                        });
+                    }
                 } else if !current.get_label().ends_with(&"-avg") {
                     self.auto_metric_rules.push(AutoMetricRule {
                         src_metric_name: current.get_label().to_string(),
@@ -222,7 +220,6 @@ impl MetricAggregator {
             let auto_rule = self.auto_metric_rules.get(auto_rule_index).unwrap();
 
             if let Some(metric_entry) = self.metrics.get(&auto_rule.src_metric_name) {
-
                 parent_metric = Some(auto_rule.src_metric_name.clone());
 
                 match auto_rule.rule_type {
@@ -252,8 +249,8 @@ impl MetricAggregator {
                                 }
                             }
                         }
-                    },
-                    AutoMetricRuleType::MovingAverage {depth} => {
+                    }
+                    AutoMetricRuleType::MovingAverage { depth } => {
                         if let MetricStorage::History {
                             current: current_metric,
                             history,
@@ -333,11 +330,11 @@ impl MetricAggregator {
     ) -> Option<(f64, f64)> {
         if let Some(metric_entry) = self.metrics.get(name) {
             if let MetricStorage::History {
-                    current,
-                    history,
-                } = &metric_entry.storage {
+                current,
+                history,
+            } = &metric_entry.storage {
                 if std::mem::discriminant(current.get_value()) == std::mem::discriminant(&MetricValue::Number(0f64)) ||
-            std::mem::discriminant(current.get_value()) == std::mem::discriminant(&MetricValue::Integer(0)) {
+                    std::mem::discriminant(current.get_value()) == std::mem::discriminant(&MetricValue::Integer(0)) {
                     let requested_len = max_len.min(history.len());
 
                     if data.len() != requested_len {

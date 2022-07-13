@@ -182,30 +182,27 @@ impl TryFrom<&json::JsonValue> for MetricUnit {
     type Error = json::JsonError;
 
     fn try_from(value: &JsonValue) -> Result<Self, Self::Error> {
-        match value.as_str() {
-            Some(value) => {
-                if value.len() > 2 {
-                    let mut offset = 0;
+        if let Some(value) = value.as_str() {
+            if value.len() > 2 {
+                let mut offset = 0;
 
-                    while offset < 2 {
-                        let first = &value[..offset];
-                        let shifted_str = &value[offset..];
+                while offset < 2 {
+                    let first = &value[..offset];
+                    let shifted_str = &value[offset..];
 
-                        let oom: Option<OrderOfMagnitude> = OrderOfMagnitude::try_from(first).ok();
+                    let oom: Option<OrderOfMagnitude> = OrderOfMagnitude::try_from(first).ok();
 
-                        match shifted_str {
-                            "pkts" => { return Ok(MetricUnit { raw_unit_num: MetricRawUnit::Packets, raw_unit_den: MetricRawUnit::None, order_of_magnitude: oom.unwrap_or(OrderOfMagnitude::One) }) },
-                            "bits" => { return Ok(MetricUnit { raw_unit_num: MetricRawUnit::Bits, raw_unit_den: MetricRawUnit::None, order_of_magnitude: oom.unwrap_or(OrderOfMagnitude::One) }) },
-                            "bytes" => { return Ok(MetricUnit { raw_unit_num: MetricRawUnit::Bytes, raw_unit_den: MetricRawUnit::None, order_of_magnitude: oom.unwrap_or(OrderOfMagnitude::One) }) },
-                            "sec" => { return Ok(MetricUnit { raw_unit_num: MetricRawUnit::Seconds, raw_unit_den: MetricRawUnit::None, order_of_magnitude: oom.unwrap_or(OrderOfMagnitude::One) }) },
-                            _ => ()
-                        }
-
-                        offset += 1
+                    match shifted_str {
+                        "pkts" => { return Ok(MetricUnit { raw_unit_num: MetricRawUnit::Packets, raw_unit_den: MetricRawUnit::None, order_of_magnitude: oom.unwrap_or(OrderOfMagnitude::One) }) },
+                        "bits" => { return Ok(MetricUnit { raw_unit_num: MetricRawUnit::Bits, raw_unit_den: MetricRawUnit::None, order_of_magnitude: oom.unwrap_or(OrderOfMagnitude::One) }) },
+                        "bytes" => { return Ok(MetricUnit { raw_unit_num: MetricRawUnit::Bytes, raw_unit_den: MetricRawUnit::None, order_of_magnitude: oom.unwrap_or(OrderOfMagnitude::One) }) },
+                        "sec" => { return Ok(MetricUnit { raw_unit_num: MetricRawUnit::Seconds, raw_unit_den: MetricRawUnit::None, order_of_magnitude: oom.unwrap_or(OrderOfMagnitude::One) }) },
+                        _ => ()
                     }
+
+                    offset += 1
                 }
-            },
-            None => ()
+            }
         }
 
         Ok(MetricUnit{ raw_unit_num: MetricRawUnit::None, raw_unit_den: MetricRawUnit::None, order_of_magnitude: OrderOfMagnitude::One })
@@ -267,17 +264,15 @@ impl TryFrom<&json::JsonValue> for MetricValue {
                         "string" => Ok(MetricValue::String(
                             value_field
                                 .as_str()
-                                .ok_or(JsonError::WrongType(
+                                .ok_or_else(|| JsonError::WrongType(
                                     "could not convert value to string".to_string(),
                                 ))?
                                 .to_string(),
                         )),
-                        "integer" => Ok(MetricValue::Integer(value_field.as_i64().ok_or(
-                            JsonError::WrongType("could not convert value to string".to_string()),
-                        )?)),
-                        "number" => Ok(MetricValue::Number(value_field.as_f64().ok_or(
-                            JsonError::WrongType("could not convert value to string".to_string()),
-                        )?)),
+                        "integer" => Ok(MetricValue::Integer(value_field.as_i64()
+                            .ok_or_else(|| JsonError::WrongType("could not convert value to string".to_string()))?)),
+                        "number" => Ok(MetricValue::Number(value_field.as_f64()
+                            .ok_or_else(|| JsonError::WrongType("could not convert value to string".to_string()))?)),
                         _ => Err(JsonError::WrongType("unknown type".to_string())),
                     }
                 } else {
